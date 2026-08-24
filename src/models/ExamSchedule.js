@@ -14,8 +14,8 @@ const examScheduleSchema = new mongoose.Schema({
   },
   examType: {
     type: String,
-    enum: ['weekly', 'trial_mcq', 'final_mcq'],
-    default: 'final_mcq'
+    enum: ['normal_exam', 'final_exam'],
+    default: 'final_exam'
   },
   totalQuestions: {
     type: Number,
@@ -55,7 +55,7 @@ const examScheduleSchema = new mongoose.Schema({
   },
   instructions: {
     type: String,
-    default: 'Read all questions carefully. There is a countdown timer for the assessment.'
+    default: 'Read all questions carefully. The timer starts automatically once you click Start.'
   },
   questions: [{
     type: mongoose.Schema.Types.ObjectId,

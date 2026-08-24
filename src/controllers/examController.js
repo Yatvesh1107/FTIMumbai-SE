@@ -1,25 +1,30 @@
 const Question = require('../models/Question');
 const ExamSchedule = require('../models/ExamSchedule');
 const ExamResult = require('../models/ExamResult');
-const Certificate = require('../models/Certificate');
+const Course = require('../models/Course');
 
 // --- QUESTIONS ---
 
-// @desc    Get Questions for a course
+// @desc    Get Questions for a course (or all courses)
 // @route   GET /api/exams/questions/:courseId
 // @access  Private
 exports.getQuestions = async (req, res) => {
   try {
-    const questions = await Question.find({ courseId: req.params.courseId });
+    const { courseId } = req.params;
+    const filter = courseId && courseId !== 'All' ? { courseId } : {};
+    const questions = await Question.find(filter)
+      .populate('courseId', 'name courseCode')
+      .sort({ createdAt: -1 });
+
     res.json({ success: true, count: questions.length, questions });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
 };
 
-// @desc    Create Question (Admin/Trainer)
+// @desc    Create Single Question (Admin)
 // @route   POST /api/exams/questions
-// @access  Private (Admin / Trainer)
+// @access  Private (Admin)
 exports.createQuestion = async (req, res) => {
   try {
     const { courseId, topic, questionText, options, marks, explanation } = req.body;
@@ -27,117 +32,141 @@ exports.createQuestion = async (req, res) => {
     if (!courseId || !questionText || !options || options.length < 2) {
       return res.status(400).json({
         success: false,
-        message: 'Course, questionText, and at least 2 options are required'
+        message: 'Course ID, Question Text, and at least 2 Options are required'
       });
     }
 
     const question = await Question.create({
       courseId,
-      topic: topic || 'General',
+      topic: topic || 'Core Subject',
       questionText: questionText.trim(),
       options,
       marks: Number(marks) || 1,
-      explanation: explanation || ''
+      explanation: explanation || '',
+      isActive: true
     });
 
-    res.status(201).json({ success: true, message: 'Question added to bank', question });
+    res.status(201).json({ success: true, message: 'Question added successfully!', question });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
 };
 
-// --- EXAM SCHEDULES ---
+// --- EXAM SCHEDULES (MAGMA STYLE) ---
 
 // @desc    Get Exam Schedules for a course
 // @route   GET /api/exams/schedules/:courseId
 // @access  Private
 exports.getExamSchedules = async (req, res) => {
   try {
-    const schedules = await ExamSchedule.find({ courseId: req.params.courseId, isActive: true })
-      .populate('questions');
+    const { courseId } = req.params;
+    const filter = courseId && courseId !== 'All' ? { courseId } : {};
+    const schedules = await ExamSchedule.find(filter)
+      .populate('courseId', 'name courseCode')
+      .populate('questions')
+      .sort({ startDate: -1 });
 
-    // If student, check if already attempted
-    let attemptsMap = {};
+    // If student, attach their exam result
+    let resultsMap = {};
     if (req.user && req.user.studentId) {
-      const results = await ExamResult.find({
-        studentId: req.user.studentId,
-        courseId: req.params.courseId
-      });
+      const results = await ExamResult.find({ studentId: req.user.studentId });
       results.forEach(r => {
-        attemptsMap[r.examScheduleId.toString()] = r;
+        resultsMap[r.examScheduleId.toString()] = r;
       });
     }
 
-    const formatted = schedules.map(s => ({
+    const schedulesWithResults = schedules.map(s => ({
       ...s.toObject(),
-      result: attemptsMap[s._id.toString()] || null
+      result: resultsMap[s._id.toString()] || null
     }));
 
-    res.json({ success: true, count: formatted.length, schedules: formatted });
+    res.json({ success: true, count: schedules.length, schedules: schedulesWithResults });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
 };
 
-// @desc    Schedule an Exam (Admin/Trainer)
+// @desc    Create Exam Schedule with Random Question Pool Selection (Admin - Magma Style)
 // @route   POST /api/exams/schedules
-// @access  Private (Admin / Trainer)
+// @access  Private (Admin)
 exports.createExamSchedule = async (req, res) => {
   try {
     const {
       courseId,
       examTitle,
-      description,
-      durationMinutes,
-      passingPercentage,
-      examDate,
-      startTime,
-      endTime,
-      questions
+      examType,
+      totalQuestions = 25,
+      marksPerQuestion = 1,
+      negativeMarks = 0,
+      durationMinutes = 45,
+      passingPercentage = 40,
+      startDate,
+      endDate,
+      instructions
     } = req.body;
 
-    if (!courseId || !examTitle || !examDate || !startTime || !endTime) {
+    if (!courseId || !examTitle || !endDate) {
       return res.status(400).json({
         success: false,
-        message: 'Course, examTitle, date, start time, and end time are required'
+        message: 'Course ID, Exam Title, and End Date are required'
       });
     }
 
-    // If questions array not provided, automatically pull questions from question bank
-    let questionIds = questions;
-    if (!questionIds || questionIds.length === 0) {
-      const availableQuestions = await Question.find({ courseId }).limit(30);
-      questionIds = availableQuestions.map(q => q._id);
+    // 1. Fetch Question Pool for this course
+    const allCourseQuestions = await Question.find({ courseId });
+
+    if (allCourseQuestions.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'No questions available in the Question Bank for this course. Please upload or add questions first.'
+      });
     }
+
+    // 2. Randomly select questions (up to totalQuestions requested)
+    const numToPick = Math.min(Number(totalQuestions), allCourseQuestions.length);
+    const shuffled = allCourseQuestions.sort(() => 0.5 - Math.random());
+    const selectedQuestions = shuffled.slice(0, numToPick).map(q => q._id);
+
+    const calculatedTotalMarks = selectedQuestions.length * Number(marksPerQuestion);
 
     const schedule = await ExamSchedule.create({
       courseId,
       examTitle: examTitle.trim(),
-      description: description || '',
+      examType: examType || 'final_exam',
+      totalQuestions: selectedQuestions.length,
+      marksPerQuestion: Number(marksPerQuestion),
+      negativeMarks: Number(negativeMarks) || 0,
+      totalMarks: calculatedTotalMarks,
       durationMinutes: Number(durationMinutes) || 45,
-      totalQuestions: questionIds.length,
       passingPercentage: Number(passingPercentage) || 40,
-      questions: questionIds,
-      examDate: new Date(examDate),
-      startTime,
-      endTime
+      startDate: startDate ? new Date(startDate) : new Date(),
+      endDate: new Date(endDate),
+      instructions: instructions || 'Read all questions carefully. Assessment timer is running.',
+      questions: selectedQuestions,
+      createdBy: req.user._id,
+      status: 'Active'
     });
 
-    res.status(201).json({ success: true, message: 'Exam scheduled successfully!', schedule });
+    res.status(201).json({
+      success: true,
+      message: `Exam scheduled successfully with ${selectedQuestions.length} randomly selected questions!`,
+      schedule
+    });
   } catch (error) {
+    console.error('Create exam schedule error:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 };
 
-// @desc    Submit Exam & Calculate Result Instantly
+// @desc    Submit Exam Assessment (Student)
 // @route   POST /api/exams/submit
 // @access  Private (Student)
 exports.submitExam = async (req, res) => {
   try {
-    const { examScheduleId, answers } = req.body; // answers: [{ questionId, selectedOptionIndex }]
+    const { examScheduleId, answers } = req.body;
 
     if (!req.user || !req.user.studentId) {
-      return res.status(400).json({ success: false, message: 'Student authorization required' });
+      return res.status(400).json({ success: false, message: 'Student authorization required.' });
     }
 
     const schedule = await ExamSchedule.findById(examScheduleId).populate('questions');
@@ -147,63 +176,73 @@ exports.submitExam = async (req, res) => {
 
     let correctCount = 0;
     let wrongCount = 0;
-    let unattemptedCount = 0;
-    const evaluatedAnswers = [];
+    let attemptedCount = 0;
 
-    for (let q of schedule.questions) {
-      const studentAns = (answers || []).find(a => a.questionId.toString() === q._id.toString());
-      if (!studentAns || studentAns.selectedOptionIndex === null || studentAns.selectedOptionIndex === undefined) {
-        unattemptedCount++;
-        evaluatedAnswers.push({
-          questionId: q._id,
-          selectedOptionIndex: -1,
-          isCorrect: false
-        });
-      } else {
-        const correctIndex = q.options.findIndex(opt => opt.isCorrect === true);
-        const isCorrect = studentAns.selectedOptionIndex === correctIndex;
-        if (isCorrect) correctCount++;
-        else wrongCount++;
-
-        evaluatedAnswers.push({
-          questionId: q._id,
-          selectedOptionIndex: studentAns.selectedOptionIndex,
-          isCorrect
-        });
-      }
+    const answersMap = {};
+    if (answers && Array.isArray(answers)) {
+      answers.forEach(a => {
+        answersMap[a.questionId.toString()] = a.selectedOptionIndex;
+      });
     }
 
-    const total = schedule.questions.length || 1;
-    const percentage = Math.round((correctCount / total) * 100);
-    const isPass = percentage >= schedule.passingPercentage;
-    let grade = 'Fail';
+    schedule.questions.forEach((q) => {
+      const qIdStr = q._id.toString();
+      const selectedIdx = answersMap[qIdStr];
+
+      if (selectedIdx !== undefined && selectedIdx !== null && selectedIdx !== '') {
+        attemptedCount++;
+        const correctOptionIndex = q.options.findIndex(opt => opt.isCorrect);
+
+        if (Number(selectedIdx) === correctOptionIndex) {
+          correctCount++;
+        } else {
+          wrongCount++;
+        }
+      }
+    });
+
+    const marksPerQ = schedule.marksPerQuestion || 1;
+    const negMarks = schedule.negativeMarks || 0;
+
+    const rawScore = (correctCount * marksPerQ) - (wrongCount * negMarks);
+    const score = Math.max(0, rawScore);
+    const totalPossibleMarks = schedule.totalMarks || (schedule.questions.length * marksPerQ);
+    const percentage = Math.round((score / (totalPossibleMarks || 1)) * 100);
+
+    const isPassed = percentage >= schedule.passingPercentage;
+    const status = isPassed ? 'Pass' : 'Fail';
+
+    let grade = 'F';
     if (percentage >= 85) grade = 'A+';
     else if (percentage >= 70) grade = 'A';
-    else if (percentage >= 55) grade = 'B';
-    else if (percentage >= 40) grade = 'C';
+    else if (percentage >= 60) grade = 'B';
+    else if (percentage >= 50) grade = 'C';
+    else if (percentage >= 40) grade = 'D';
 
-    const result = await ExamResult.create({
-      studentId: req.user.studentId,
-      courseId: schedule.courseId,
-      examScheduleId: schedule._id,
-      totalQuestions: total,
-      correctAnswers: correctCount,
-      wrongAnswers: wrongCount,
-      unattempted: unattemptedCount,
-      score: correctCount,
-      percentage,
-      grade,
-      status: isPass ? 'Pass' : 'Fail',
-      answers: evaluatedAnswers
-    });
+    const result = await ExamResult.findOneAndUpdate(
+      { examScheduleId, studentId: req.user.studentId },
+      {
+        courseId: schedule.courseId,
+        score,
+        totalQuestions: schedule.questions.length,
+        attemptedQuestions: attemptedCount,
+        correctAnswers: correctCount,
+        wrongAnswers: wrongCount,
+        percentage,
+        grade,
+        status,
+        submittedAt: new Date()
+      },
+      { upsert: true, new: true }
+    );
 
     res.json({
       success: true,
-      message: isPass ? 'Congratulations! You passed the exam.' : 'Exam completed.',
+      message: `Exam finished! You scored ${percentage}% (${status}) with Grade ${grade}`,
       result
     });
   } catch (error) {
-    console.error('Exam submit error:', error);
+    console.error('Submit exam error:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 };
