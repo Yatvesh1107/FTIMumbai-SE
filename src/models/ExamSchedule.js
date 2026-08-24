@@ -7,6 +7,28 @@ const examScheduleSchema = new mongoose.Schema({
     required: true,
     index: true
   },
+  batchId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Batch',
+    default: null
+  },
+  targetType: {
+    type: String,
+    enum: ['batch', 'individual'],
+    default: 'batch'
+  },
+  targetStudentIds: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Student'
+  }],
+  isAllBatches: {
+    type: Boolean,
+    default: false
+  },
+  batchNameSnapshot: {
+    type: String,
+    default: 'All Batches'
+  },
   examTitle: {
     type: String,
     required: true,

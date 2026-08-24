@@ -61,6 +61,7 @@ exports.createAdmission = async (req, res) => {
       
       // Enrollment & Course
       courseId,
+      batchId,
       batchTiming,
       joiningDate,
       
@@ -157,12 +158,22 @@ exports.createAdmission = async (req, res) => {
     }
 
     // 4. Create Admission Record
+    let finalBatchTiming = batchTiming || 'Morning (10:00 AM - 12:00 PM)';
+    if (batchId) {
+      const Batch = require('../models/Batch');
+      const batchDoc = await Batch.findById(batchId);
+      if (batchDoc) {
+        finalBatchTiming = `${batchDoc.batchName} (${batchDoc.timing})`;
+      }
+    }
+
     const admissionNo = await generateAdmissionNo();
     const admission = await Admission.create({
       studentId: student._id,
       courseId: course._id,
+      batchId: batchId || null,
       admissionNo,
-      batchTiming: batchTiming || 'Morning (10:00 AM - 12:00 PM)',
+      batchTiming: finalBatchTiming,
       admissionDate: new Date(),
       joiningDate: joiningDate ? new Date(joiningDate) : new Date(),
       standardCourseFee: standardFeeNum,
@@ -258,6 +269,7 @@ exports.getAdmissions = async (req, res) => {
     const admissions = await Admission.find(filter)
       .populate('studentId')
       .populate('courseId')
+      .populate('batchId')
       .populate('registeredBy', 'name email role')
       .sort({ createdAt: -1 });
 

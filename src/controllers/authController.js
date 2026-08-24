@@ -16,18 +16,34 @@ exports.login = async (req, res) => {
     const { email, password } = req.body;
 
     if (!email || !password) {
-      return res.status(400).json({ success: false, message: 'Please provide email and password' });
+      return res.status(400).json({ success: false, message: 'Please provide email / mobile / enrollment no and password' });
     }
 
-    const user = await User.findOne({ email: email.toLowerCase().trim() });
+    const input = email.trim();
+
+    // 1. Check by direct email or mobile in User model
+    let user = await User.findOne({
+      $or: [
+        { email: input.toLowerCase() },
+        { mobile: input }
+      ]
+    });
+
+    // 2. If not found, check if input is an Enrollment No
+    if (!user) {
+      const student = await Student.findOne({ enrollmentNo: input.toUpperCase() });
+      if (student && student.userId) {
+        user = await User.findById(student.userId);
+      }
+    }
 
     if (!user) {
-      return res.status(401).json({ success: false, message: 'Invalid email or password' });
+      return res.status(401).json({ success: false, message: 'Invalid email, mobile number, or password' });
     }
 
     const isMatch = await user.matchPassword(password);
     if (!isMatch) {
-      return res.status(401).json({ success: false, message: 'Invalid email or password' });
+      return res.status(401).json({ success: false, message: 'Invalid email, mobile number, or password' });
     }
 
     user.lastLogin = new Date();
