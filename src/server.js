@@ -1,14 +1,28 @@
 require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
+const path = require("path");
 const nodemailer = require("nodemailer");
+const connectDB = require("./config/db");
+
+// Initialize Database
+connectDB();
 
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-app.use(cors());
+// Middlewares
+app.use(cors({
+  origin: "*",
+  credentials: true
+}));
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
+// Serve Uploads Directory Statically
+app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
+
+// Email Transporter
 const transporter = nodemailer.createTransport({
   host: process.env.SMTP_HOST || "smtp.gmail.com",
   port: Number(process.env.SMTP_PORT) || 465,
@@ -44,8 +58,20 @@ function buildEnquiryMail({ name, mobile, email, course, message }) {
   };
 }
 
-app.get("/api/health", (_req, res) => res.json({ ok: true }));
+// Health Check
+app.get("/api/health", (_req, res) => res.json({ ok: true, timestamp: new Date() }));
 
+// Mount API Routes
+app.use("/api/auth", require("./routes/authRoutes"));
+app.use("/api/courses", require("./routes/courseRoutes"));
+app.use("/api/admissions", require("./routes/admissionRoutes"));
+app.use("/api/fees", require("./routes/feeRoutes"));
+app.use("/api/lms", require("./routes/lmsRoutes"));
+app.use("/api/academics", require("./routes/academicRoutes"));
+app.use("/api/exams", require("./routes/examRoutes"));
+app.use("/api/certificates", require("./routes/certificateRoutes"));
+
+// Public Enquiry Form Route
 app.post("/api/enquiry", async (req, res) => {
   const { name, mobile, email, course, message } = req.body || {};
 
@@ -63,4 +89,12 @@ app.post("/api/enquiry", async (req, res) => {
   }
 });
 
-app.listen(PORT, () => console.log(`Backend running on http://localhost:${PORT}`));
+// Error handling middleware
+app.use((err, req, res, next) => {
+  console.error("Express Error:", err.stack);
+  res.status(500).json({ success: false, message: err.message || "Internal Server Error" });
+});
+
+app.listen(PORT, () => {
+  console.log(`🚀 FTI Mumbai Backend Server running on http://localhost:${PORT}`);
+});
