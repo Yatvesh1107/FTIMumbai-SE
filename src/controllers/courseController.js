@@ -25,6 +25,42 @@ exports.getCourses = async (req, res) => {
   }
 };
 
+// @desc    Get ONLY the logged-in student's enrolled courses (via Admissions)
+// @route   GET /api/courses/my/enrolled
+// @access  Private
+exports.getMyEnrolledCourses = async (req, res) => {
+  try {
+    // Staff preview fallback: no linked student profile -> all Active courses
+    if (!req.user.studentId) {
+      const all = await Course.find({ status: 'Active' }).sort({ name: 1 });
+      return res.json({ success: true, count: all.length, courses: all, enrolledOnly: false });
+    }
+
+    const admissions = await Admission.find({ studentId: req.user.studentId }).populate('courseId');
+
+    // De-duplicate in case the same course was admitted twice
+    const unique = new Map();
+    admissions.forEach((adm) => {
+      if (!adm.courseId || adm.courseId.status !== 'Active') return;
+      const cid = adm.courseId._id.toString();
+      if (!unique.has(cid)) {
+        unique.set(cid, {
+          ...adm.courseId.toObject(),
+          admissionId: adm._id,
+          academicStatus: adm.academicStatus,
+          joiningDate: adm.joiningDate,
+          batchTiming: adm.batchTiming
+        });
+      }
+    });
+
+    const courses = Array.from(unique.values());
+    res.json({ success: true, count: courses.length, courses, enrolledOnly: true });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Server error fetching enrolled courses', error: error.message });
+  }
+};
+
 // @desc    Get single course by ID
 // @route   GET /api/courses/:id
 // @access  Public / Private
