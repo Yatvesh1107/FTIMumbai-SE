@@ -1,10 +1,72 @@
 const VideoLecture = require('../models/VideoLecture');
 const VideoProgress = require('../models/VideoProgress');
+const VideoQuizAttempt = require('../models/VideoQuizAttempt');
 const LiveSession = require('../models/LiveSession');
 const Course = require('../models/Course');
 const { compressVideo } = require('../utils/videoProcessor');
+const XLSX = require('xlsx');
 const path = require('path');
 const fs = require('fs');
+
+// Parse MCQs from an uploaded Excel sheet (same columns as Study Notes)
+const parseQuestionsFromExcel = (excelPath) => {
+  const questions = [];
+  try {
+    const workbook = XLSX.readFile(excelPath, { cellDates: true, cellNF: true, cellText: true });
+    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+    const rawData = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+
+    rawData.forEach((row) => {
+      const qText = (row['Question'] || row['question'] || row['Question Text'] || '').toString().trim();
+      if (!qText) return;
+
+      const optA = (row['Option A'] || row['OptionA'] || row['A'] || '').toString().trim();
+      const optB = (row['Option B'] || row['OptionB'] || row['B'] || '').toString().trim();
+      const optC = (row['Option C'] || row['OptionC'] || row['C'] || '').toString().trim();
+      const optD = (row['Option D'] || row['OptionD'] || row['D'] || '').toString().trim();
+
+      if (!optA || !optB) return;
+
+      const options = [
+        { label: 'A', text: optA },
+        { label: 'B', text: optB }
+      ];
+      if (optC) options.push({ label: 'C', text: optC });
+      if (optD) options.push({ label: 'D', text: optD });
+
+      const rawAns = (row['Correct Answer'] || row['Answer'] || row['Correct'] || 'A').toString().trim().toUpperCase();
+      const validAns = ['A', 'B', 'C', 'D'].includes(rawAns) ? rawAns : 'A';
+      const explanation = (row['Explanation'] || row['explanation'] || '').toString().trim();
+
+      questions.push({ question: qText, options, correctAnswer: validAns, explanation });
+    });
+
+    if (fs.existsSync(excelPath)) fs.unlinkSync(excelPath);
+  } catch (e) {
+    console.error('Error parsing MCQs Excel in Video Lecture:', e);
+  }
+  return questions;
+};
+
+// Resolve incoming questions from excelFile or manualQuestions payload
+const resolveIncomingQuestions = (req, currentCount) => {
+  if (req.files && req.files['excelFile'] && req.files['excelFile'].length > 0) {
+    return parseQuestionsFromExcel(req.files['excelFile'][0].path);
+  }
+  if (req.body.manualQuestions !== undefined) {
+    try {
+      const parsed = typeof req.body.manualQuestions === 'string'
+        ? JSON.parse(req.body.manualQuestions)
+        : req.body.manualQuestions;
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (e) {
+      console.error('Manual questions parse error:', e);
+      return null;
+    }
+  }
+  if (req.body.clearQuestions === 'true') return [];
+  return null; // No change requested
+};
 
 // --- VIDEO LECTURES ---
 
@@ -16,8 +78,9 @@ exports.getCourseVideos = async (req, res) => {
     const { courseId } = req.params;
     const videos = await VideoLecture.find({ courseId, isActive: true }).sort({ orderIndex: 1, createdAt: 1 });
 
-    // If user is a student, attach their progress
+    // If user is a student, attach their watch progress + quiz attempt summary
     let progressMap = {};
+    let attemptMap = {};
     if (req.user && req.user.studentId) {
       const progresses = await VideoProgress.find({
         studentId: req.user.studentId,
@@ -31,15 +94,32 @@ exports.getCourseVideos = async (req, res) => {
           completedAt: p.completedAt
         };
       });
+
+      const attempts = await VideoQuizAttempt.find({
+        studentId: req.user.studentId,
+        courseId
+      });
+      attempts.forEach(att => {
+        attemptMap[att.videoId.toString()] = {
+          score: att.score,
+          totalQuestions: att.totalQuestions,
+          percentage: att.percentage,
+          status: att.status,
+          completedAt: att.completedAt
+        };
+      });
     }
 
     const videosWithProgress = videos.map(v => ({
       ...v.toObject(),
+      totalQuestions: v.questions ? v.questions.length : 0,
+      questions: undefined, // Keep list payload light — details come from the detail endpoint
       progress: progressMap[v._id.toString()] || {
         watchedSeconds: 0,
         watchPercentage: 0,
         isWatched: false
-      }
+      },
+      userAttempt: attemptMap[v._id.toString()] || null
     }));
 
     res.json({
@@ -99,6 +179,9 @@ exports.createVideo = async (req, res) => {
       }
     }
 
+    // Resolve attached practice MCQs (Excel import or manual builder)
+    let questions = resolveIncomingQuestions(req, 0) || [];
+
     const video = await VideoLecture.create({
       courseId,
       moduleTitle: moduleTitle.trim(),
@@ -108,16 +191,262 @@ exports.createVideo = async (req, res) => {
       thumbnailUrl: finalThumbnailUrl,
       durationInSeconds: calculatedDuration,
       orderIndex: Number(orderIndex) || 1,
-      resources: resources ? (typeof resources === 'string' ? JSON.parse(resources) : resources) : []
+      resources: resources ? (typeof resources === 'string' ? JSON.parse(resources) : resources) : [],
+      questions,
+      totalQuestions: questions.length
     });
 
     res.status(201).json({
       success: true,
-      message: 'Video lecture successfully created and compressed for streaming!',
+      message: `Video lecture uploaded successfully with ${questions.length} practice MCQs!`,
       video
     });
   } catch (error) {
     console.error('Video upload controller error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// @desc    Update Video Lecture (Admin) — optional new file gets re-compressed
+// @route   PUT /api/lms/videos/:videoId
+// @access  Private (Admin)
+exports.updateVideo = async (req, res) => {
+  try {
+    const { videoId } = req.params;
+    const { moduleTitle, title, description, videoUrl, orderIndex, isActive } = req.body;
+
+    const video = await VideoLecture.findById(videoId);
+    if (!video) {
+      return res.status(404).json({ success: false, message: 'Video lecture not found' });
+    }
+
+    const hasNewVideo = req.files && req.files['video'];
+    const hasNewThumbnail = req.files && req.files['thumbnail'];
+
+    // If switching from uploaded file to external URL, ensure URL provided when no new file
+    if (!hasNewVideo && videoUrl === undefined && !video.videoUrl.startsWith('/uploads')) {
+      return res.status(400).json({ success: false, message: 'A video file or video URL is required' });
+    }
+
+    let finalVideoUrl = video ? video.videoUrl : '';
+    let finalDuration = video.durationInSeconds;
+
+    // New video file: compress it, then clean up BOTH the new raw file and old stored file
+    if (hasNewVideo) {
+      const uploadedFile = req.files['video'][0];
+      const inputPath = uploadedFile.path;
+      const compressedFileName = 'compressed-' + Date.now() + '-' + path.basename(uploadedFile.filename, path.extname(uploadedFile.filename)) + '.mp4';
+
+      console.log('Re-compressing updated video:', uploadedFile.filename);
+      const meta = await compressVideo(inputPath, compressedFileName);
+      finalVideoUrl = meta.url;
+      if (meta.durationInSeconds > 0) {
+        finalDuration = meta.durationInSeconds;
+      }
+
+      // Remove previously stored local file (external URLs are untouched)
+      if (video.videoUrl && video.videoUrl.startsWith('/uploads')) {
+        const oldPath = path.join(__dirname, '..', '..', video.videoUrl);
+        if (fs.existsSync(oldPath)) {
+          try { fs.unlinkSync(oldPath); } catch (e) { console.error('Old video cleanup failed:', e.message); }
+        }
+      }
+    } else if (videoUrl !== undefined && videoUrl.trim() !== '') {
+      // Switching to an external URL — remove stored local file
+      if (video.videoUrl && video.videoUrl.startsWith('/uploads')) {
+        const oldPath = path.join(__dirname, '..', '..', video.videoUrl);
+        if (fs.existsSync(oldPath)) {
+          try { fs.unlinkSync(oldPath); } catch (e) { console.error('Old video cleanup failed:', e.message); }
+        }
+      }
+      finalVideoUrl = videoUrl.trim();
+    }
+
+    // Thumbnail replacement
+    let finalThumbnailUrl = video.thumbnailUrl || '';
+    if (hasNewThumbnail) {
+      if (video.thumbnailUrl && video.thumbnailUrl.startsWith('/uploads')) {
+        const oldThumb = path.join(__dirname, '..', '..', video.thumbnailUrl);
+        if (fs.existsSync(oldThumb)) {
+          try { fs.unlinkSync(oldThumb); } catch (e) { console.error('Old thumbnail cleanup failed:', e.message); }
+        }
+      }
+      finalThumbnailUrl = `/uploads/thumbnails/${req.files['thumbnail'][0].filename}`;
+    }
+
+    const updates = {};
+    if (moduleTitle !== undefined) updates.moduleTitle = moduleTitle.trim();
+    if (title !== undefined) updates.title = title.trim();
+    if (description !== undefined) updates.description = description;
+    if (orderIndex !== undefined) updates.orderIndex = Number(orderIndex) || video.orderIndex;
+    if (isActive !== undefined) updates.isActive = isActive === 'true' || isActive === true;
+
+    // Replace practice MCQs only when new ones are supplied
+    const incomingQuestions = resolveIncomingQuestions(req, video.questions.length);
+    if (incomingQuestions !== null) {
+      updates.questions = incomingQuestions;
+      updates.totalQuestions = incomingQuestions.length;
+    }
+
+    const updated = await VideoLecture.findByIdAndUpdate(
+      videoId,
+      {
+        ...updates,
+        videoUrl: finalVideoUrl,
+        thumbnailUrl: finalThumbnailUrl,
+        durationInSeconds: finalDuration
+      },
+      { new: true }
+    );
+
+    res.json({
+      success: true,
+      message: 'Video lecture updated successfully!',
+      video: updated
+    });
+  } catch (error) {
+    console.error('Video update controller error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// @desc    Delete Video Lecture (Admin) — removes DB record + physical files
+// @route   DELETE /api/lms/videos/:videoId
+// @access  Private (Admin)
+exports.deleteVideo = async (req, res) => {
+  try {
+    const { videoId } = req.params;
+    const video = await VideoLecture.findById(videoId);
+    if (!video) {
+      return res.status(404).json({ success: false, message: 'Video lecture not found' });
+    }
+
+    // Delete stored local files (external URLs are untouched)
+    if (video.videoUrl && video.videoUrl.startsWith('/uploads')) {
+      const videoPath = path.join(__dirname, '..', '..', video.videoUrl);
+      if (fs.existsSync(videoPath)) {
+        try { fs.unlinkSync(videoPath); } catch (e) { console.error('Video file cleanup failed:', e.message); }
+      }
+    }
+    if (video.thumbnailUrl && video.thumbnailUrl.startsWith('/uploads')) {
+      const thumbPath = path.join(__dirname, '..', '..', video.thumbnailUrl);
+      if (fs.existsSync(thumbPath)) {
+        try { fs.unlinkSync(thumbPath); } catch (e) { console.error('Thumbnail cleanup failed:', e.message); }
+      }
+    }
+
+    await VideoProgress.deleteMany({ videoId });
+    await VideoLecture.findByIdAndDelete(videoId);
+
+    res.json({ success: true, message: 'Video lecture deleted successfully!' });
+  } catch (error) {
+    console.error('Video delete controller error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// @desc    Get single video lecture with attached MCQs (Student/Admin)
+// @route   GET /api/lms/videos/:videoId/detail
+// @access  Private
+exports.getVideoDetail = async (req, res) => {
+  try {
+    const video = await VideoLecture.findById(req.params.videoId);
+    if (!video) {
+      return res.status(404).json({ success: false, message: 'Video lecture not found' });
+    }
+
+    let userAttempt = null;
+    if (req.user && req.user.studentId) {
+      userAttempt = await VideoQuizAttempt.findOne({
+        videoId: video._id,
+        studentId: req.user.studentId
+      });
+    }
+
+    res.json({
+      success: true,
+      video: { ...video.toObject(), totalQuestions: video.questions.length },
+      userAttempt
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// @desc    Submit Student Video Practice Quiz Attempt (Student)
+// @route   POST /api/lms/videos/:videoId/quiz-submit
+// @access  Private (Student)
+exports.submitVideoQuiz = async (req, res) => {
+  try {
+    const { videoId } = req.params;
+    const { answers, timeSpentSeconds } = req.body;
+
+    if (!req.user || !req.user.studentId) {
+      return res.status(400).json({ success: false, message: 'Student authentication required.' });
+    }
+
+    const video = await VideoLecture.findById(videoId);
+    if (!video) {
+      return res.status(404).json({ success: false, message: 'Video lecture not found' });
+    }
+
+    const totalQuestions = video.questions.length;
+    if (totalQuestions === 0) {
+      return res.status(400).json({ success: false, message: 'No questions attached to this video.' });
+    }
+
+    let score = 0;
+    const evaluatedAnswers = [];
+
+    video.questions.forEach((q) => {
+      const qIdStr = q._id.toString();
+      const submittedOption = answers ? (answers[qIdStr] || '').toUpperCase() : '';
+      const isCorrect = submittedOption === q.correctAnswer;
+
+      if (isCorrect) score += 1;
+
+      evaluatedAnswers.push({
+        questionId: q._id,
+        questionText: q.question,
+        selectedOption: submittedOption,
+        correctAnswer: q.correctAnswer,
+        isCorrect
+      });
+    });
+
+    const percentage = Math.round((score / totalQuestions) * 100);
+    const status = percentage >= 40 ? 'Passed' : 'Failed';
+
+    const attempt = await VideoQuizAttempt.findOneAndUpdate(
+      { videoId, studentId: req.user.studentId },
+      {
+        courseId: video.courseId,
+        score,
+        totalQuestions,
+        percentage,
+        status,
+        answers: evaluatedAnswers,
+        timeSpentSeconds: Number(timeSpentSeconds) || 0,
+        completedAt: new Date()
+      },
+      { upsert: true, new: true }
+    );
+
+    const allAttempts = await VideoQuizAttempt.find({ videoId });
+    const avgScore = Math.round(
+      allAttempts.reduce((acc, curr) => acc + curr.percentage, 0) / (allAttempts.length || 1)
+    );
+    await VideoLecture.findByIdAndUpdate(videoId, {
+      totalAttempts: allAttempts.length,
+      averageScore: avgScore
+    });
+
+    res.json({
+      success: true,
+      message: `Practice Quiz Complete! You scored ${score}/${totalQuestions} (${percentage}%)`,
+      attempt
+    });
+  } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
 };

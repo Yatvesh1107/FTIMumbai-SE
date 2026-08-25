@@ -3,6 +3,10 @@ const router = express.Router();
 const {
   getCourseVideos,
   createVideo,
+  updateVideo,
+  deleteVideo,
+  getVideoDetail,
+  submitVideoQuiz,
   updateVideoProgress,
   getLiveSessions,
   createLiveSession
@@ -23,6 +27,20 @@ router.post(
   handleVideoUploadError,
   createVideo
 );
+router.put(
+  '/videos/:videoId',
+  protect,
+  authorize('admin'),
+  uploadVideoFiles.fields([
+    { name: 'video', maxCount: 1 },
+    { name: 'thumbnail', maxCount: 1 }
+  ]),
+  handleVideoUploadError,
+  updateVideo
+);
+router.delete('/videos/:videoId', protect, authorize('admin'), deleteVideo);
+router.get('/videos/:videoId/detail', protect, getVideoDetail);
+router.post('/videos/:videoId/quiz-submit', protect, submitVideoQuiz);
 router.post('/videos/:videoId/progress', protect, updateVideoProgress);
 
 // Live Sessions

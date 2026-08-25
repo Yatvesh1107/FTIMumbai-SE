@@ -96,6 +96,10 @@ app.use((err, req, res, next) => {
   res.status(500).json({ success: false, message: err.message || "Internal Server Error" });
 });
 
-app.listen(PORT, () => {
+// Increased timeouts for large video uploads + server-side compression (1 hour)
+const server = app.listen(PORT, () => {
   console.log(`🚀 FTI Mumbai Backend Server running on http://localhost:${PORT}`);
 });
+server.timeout = 3600000;
+server.keepAliveTimeout = 3600000;
+server.headersTimeout = 3605000;
