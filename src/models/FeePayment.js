@@ -8,6 +8,7 @@ const feePaymentSchema = new mongoose.Schema({
   totalFee: { type: Number, required: true },
   paidAmount: { type: Number, default: 0 },
   remainingAmount: { type: Number, required: true },
+  nextDueDate: { type: Date, default: null },
   
   // Installments Breakdown
   installments: [{

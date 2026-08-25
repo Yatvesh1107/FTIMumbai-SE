@@ -19,9 +19,15 @@ const admissionSchema = new mongoose.Schema({
   standardCourseFee: { type: Number, required: true },
   agreedTotalFee: { type: Number, required: true },
   discountGiven: { type: Number, default: 0 },
+  paymentType: {
+    type: String,
+    enum: ['full', 'installment'],
+    default: 'installment'
+  },
   downPayment: { type: Number, required: true, default: 0 },
   totalPaid: { type: Number, default: 0 },
   totalBalance: { type: Number, required: true },
+  nextDueDate: { type: Date, default: null },
   
   // Statuses
   paymentStatus: { 

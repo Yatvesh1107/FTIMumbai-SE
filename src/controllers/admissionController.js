@@ -68,9 +68,11 @@ exports.createAdmission = async (req, res) => {
       // Fee & Negotiation Details
       agreedTotalFee,
       downPayment,
+      paymentType,
       paymentMode,
       transactionRef,
       installmentsList, // array of { amount, dueDate }
+      nextDueDate,
       remarks
     } = req.body;
 
@@ -100,14 +102,18 @@ exports.createAdmission = async (req, res) => {
       });
     }
 
-    const downPaymentNum = Number(downPayment || 0);
-    if (downPaymentNum > agreedFeeNum) {
+    const isFullPayment = paymentType === 'full';
+    const requestedDown = Number(downPayment || 0);
+
+    if (!isFullPayment && requestedDown > agreedFeeNum) {
       return res.status(400).json({
         success: false,
-        message: 'Down payment cannot be greater than the total agreed fee.'
+        message: 'Received amount cannot be greater than the total agreed fee.'
       });
     }
 
+    // Magma-style: full payment locks the received amount to the total fee
+    const downPaymentNum = isFullPayment ? agreedFeeNum : requestedDown;
     const discountGiven = Math.max(0, standardFeeNum - agreedFeeNum);
     const totalBalance = Math.max(0, agreedFeeNum - downPaymentNum);
 
@@ -179,9 +185,11 @@ exports.createAdmission = async (req, res) => {
       standardCourseFee: standardFeeNum,
       agreedTotalFee: agreedFeeNum,
       discountGiven,
+      paymentType: isFullPayment ? 'full' : 'installment',
       downPayment: downPaymentNum,
       totalPaid: downPaymentNum,
       totalBalance,
+      nextDueDate: null, // Set below once installments are resolved
       paymentStatus: totalBalance === 0 ? 'paid' : (downPaymentNum > 0 ? 'partial' : 'pending'),
       remarks: remarks || '',
       registeredBy: req.user ? req.user._id : null
@@ -189,7 +197,7 @@ exports.createAdmission = async (req, res) => {
 
     // 5. Build Installment Schedule in FeePayment
     let formattedInstallments = [];
-    if (installmentsList && Array.isArray(installmentsList) && installmentsList.length > 0) {
+    if (!isFullPayment && installmentsList && Array.isArray(installmentsList) && installmentsList.length > 0) {
       formattedInstallments = installmentsList.map((inst, index) => ({
         installmentNo: index + 1,
         amount: Number(inst.amount),
@@ -198,8 +206,8 @@ exports.createAdmission = async (req, res) => {
         status: 'pending',
         fine: 0
       }));
-    } else if (totalBalance > 0) {
-      // Default: Split remaining into 2 monthly installments
+    } else if (!isFullPayment && totalBalance > 0) {
+      // Default fallback: Split remaining into 2 monthly installments
       const half = Math.ceil(totalBalance / 2);
       const now = new Date();
       const month1 = new Date(now.setMonth(now.getMonth() + 1));
@@ -210,6 +218,20 @@ exports.createAdmission = async (req, res) => {
         { installmentNo: 2, amount: totalBalance - half, dueDate: month2, paidAmount: 0, status: 'pending', fine: 0 }
       ];
     }
+
+    // Magma-style Next Due Date: only stored when balance is pending
+    let admissionNextDueDate = null;
+    if (totalBalance > 0) {
+      const firstPending = formattedInstallments.find((i) => i.status === 'pending');
+      if (firstPending && !isNaN(new Date(firstPending.dueDate).getTime())) {
+        admissionNextDueDate = firstPending.dueDate;
+      } else if (nextDueDate && !isNaN(new Date(nextDueDate).getTime())) {
+        admissionNextDueDate = new Date(nextDueDate);
+      }
+    }
+
+    await Admission.findByIdAndUpdate(admission._id, { nextDueDate: admissionNextDueDate });
+    admission.nextDueDate = admissionNextDueDate;
 
     // Transactions list
     const transactions = [];
@@ -233,6 +255,7 @@ exports.createAdmission = async (req, res) => {
       totalFee: agreedFeeNum,
       paidAmount: downPaymentNum,
       remainingAmount: totalBalance,
+      nextDueDate: admissionNextDueDate,
       installments: formattedInstallments,
       transactions,
       gracePeriodDays: 3,

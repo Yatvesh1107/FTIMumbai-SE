@@ -80,7 +80,11 @@ exports.collectFee = async (req, res) => {
       }
     }
 
-    // 4. Check if student still has overdue installments past grace period
+    // 4. Refresh Next Due Date: move to the next pending installment, clear when fully paid
+    const nextPending = feeDoc.installments.find((inst) => inst.status !== 'paid');
+    feeDoc.nextDueDate = feeDoc.remainingAmount > 0 && nextPending ? nextPending.dueDate : null;
+
+    // 5. Check if student still has overdue installments past grace period
     const now = new Date();
     let hasOverdue = false;
     for (let inst of feeDoc.installments) {
@@ -105,10 +109,11 @@ exports.collectFee = async (req, res) => {
 
     await feeDoc.save();
 
-    // 5. Update Admission status
+    // 6. Update Admission status
     await Admission.findByIdAndUpdate(admissionId, {
       totalPaid: feeDoc.paidAmount,
       totalBalance: feeDoc.remainingAmount,
+      nextDueDate: feeDoc.nextDueDate,
       paymentStatus: feeDoc.remainingAmount === 0 ? 'paid' : 'partial'
     });
 
