@@ -77,10 +77,18 @@ exports.createAdmission = async (req, res) => {
     } = req.body;
 
     // 1. Validate required fields
-    if (!fullName || !mobile || !email || !courseId || agreedTotalFee === undefined) {
+    if (!courseId || agreedTotalFee === undefined) {
       return res.status(400).json({
         success: false,
-        message: 'Full name, mobile, email, course, and agreed fee are mandatory.'
+        message: 'Course and agreed fee are mandatory.'
+      });
+    }
+
+    // For new students, personal details are mandatory
+    if (!req.body.studentId && (!fullName || !mobile || !email)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Full name, mobile, and email are mandatory for new students.'
       });
     }
 
@@ -118,52 +126,70 @@ exports.createAdmission = async (req, res) => {
     const totalBalance = Math.max(0, agreedFeeNum - downPaymentNum);
 
     // 3. Find or Create Student Record
-    let student = await Student.findOne({ 
-      $or: [{ email: email.toLowerCase().trim() }, { mobile: mobile.trim() }] 
-    });
-
-    if (!student) {
-      const enrollmentNo = await generateEnrollmentNo();
-      student = await Student.create({
-        enrollmentNo,
-        fullName: fullName.trim(),
-        gender: gender || 'Male',
-        dob: dob || null,
-        bloodGroup: bloodGroup || '',
-        profilePhoto: profilePhoto || '',
-        mobile: mobile.trim(),
-        whatsappMobile: whatsappMobile ? whatsappMobile.trim() : mobile.trim(),
-        email: email.toLowerCase().trim(),
-        currentAddress: currentAddress || '',
-        permanentAddress: permanentAddress || currentAddress || '',
-        guardianName: guardianName || '',
-        guardianRelation: guardianRelation || 'Parent',
-        guardianMobile: guardianMobile || '',
-        guardianOccupation: guardianOccupation || '',
-        highestQualification: highestQualification || '12th',
-        schoolOrCollege: schoolOrCollege || '',
-        passingYear: passingYear ? Number(passingYear) : null,
-        idProofType: idProofType || 'Aadhar Card',
-        idProofNumber: idProofNumber || '',
-        idProofDocumentUrl: idProofDocumentUrl || '',
-        status: 'active'
+    let student;
+    if (req.body.studentId) {
+      // Existing student — add another course
+      student = await Student.findById(req.body.studentId);
+      if (!student) {
+        return res.status(404).json({ success: false, message: 'Student not found for the provided studentId.' });
+      }
+    } else {
+      student = await Student.findOne({
+        $or: [{ email: email.toLowerCase().trim() }, { mobile: mobile.trim() }]
       });
 
-      // Also create User Account for Student login
-      const defaultPassword = mobile.trim().slice(-6) || 'fti123';
-      const user = await User.create({
-        name: fullName.trim(),
-        email: email.toLowerCase().trim(),
-        password: defaultPassword,
-        role: 'student',
-        mobile: mobile.trim(),
-        studentId: student._id
-      });
-      student.userId = user._id;
-      await student.save();
+      if (!student) {
+        const enrollmentNo = await generateEnrollmentNo();
+        student = await Student.create({
+          enrollmentNo,
+          fullName: fullName.trim(),
+          gender: gender || 'Male',
+          dob: dob || null,
+          bloodGroup: bloodGroup || '',
+          profilePhoto: profilePhoto || '',
+          mobile: mobile.trim(),
+          whatsappMobile: whatsappMobile ? whatsappMobile.trim() : mobile.trim(),
+          email: email.toLowerCase().trim(),
+          currentAddress: currentAddress || '',
+          permanentAddress: permanentAddress || currentAddress || '',
+          guardianName: guardianName || '',
+          guardianRelation: guardianRelation || 'Parent',
+          guardianMobile: guardianMobile || '',
+          guardianOccupation: guardianOccupation || '',
+          highestQualification: highestQualification || '12th',
+          schoolOrCollege: schoolOrCollege || '',
+          passingYear: passingYear ? Number(passingYear) : null,
+          idProofType: idProofType || 'Aadhar Card',
+          idProofNumber: idProofNumber || '',
+          idProofDocumentUrl: idProofDocumentUrl || '',
+          status: 'active'
+        });
+
+        // Also create User Account for Student login
+        const defaultPassword = mobile.trim().slice(-6) || 'fti123';
+        const user = await User.create({
+          name: fullName.trim(),
+          email: email.toLowerCase().trim(),
+          password: defaultPassword,
+          role: 'student',
+          mobile: mobile.trim(),
+          studentId: student._id
+        });
+        student.userId = user._id;
+        await student.save();
+      }
     }
 
-    // 4. Create Admission Record
+    // 4. Check for duplicate course admission
+    const existingAdmission = await Admission.findOne({ studentId: student._id, courseId: course._id });
+    if (existingAdmission) {
+      return res.status(400).json({
+        success: false,
+        message: `Student is already enrolled in '${course.name}'. Cannot add duplicate admission.`
+      });
+    }
+
+    // 5. Create Admission Record
     let finalBatchTiming = batchTiming || 'Morning (10:00 AM - 12:00 PM)';
     if (batchId) {
       const Batch = require('../models/Batch');
@@ -275,6 +301,41 @@ exports.createAdmission = async (req, res) => {
   } catch (error) {
     console.error('Admission creation error:', error);
     res.status(500).json({ success: false, message: 'Server error creating admission', error: error.message });
+  }
+};
+
+// @desc    Search students by name/mobile/enrollment with their existing admissions
+// @route   GET /api/admissions/student/search?q=query
+// @access  Private (Admin / Receptionist)
+exports.searchStudentsWithAdmissions = async (req, res) => {
+  try {
+    const { q } = req.query;
+    if (!q || q.trim().length < 2) {
+      return res.json({ success: true, students: [] });
+    }
+
+    const query = q.trim().toLowerCase();
+    const students = await Student.find({
+      $or: [
+        { fullName: { $regex: query, $options: 'i' } },
+        { mobile: { $regex: query } },
+        { enrollmentNo: { $regex: query, $options: 'i' } }
+      ]
+    }).limit(20);
+
+    const results = await Promise.all(students.map(async (s) => {
+      const admissions = await Admission.find({ studentId: s._id })
+        .populate('courseId', 'name courseCode')
+        .sort({ createdAt: -1 });
+      return {
+        ...s.toObject(),
+        admissions
+      };
+    }));
+
+    res.json({ success: true, students: results });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
   }
 };
 
