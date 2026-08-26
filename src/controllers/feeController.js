@@ -152,22 +152,85 @@ exports.getStudentFees = async (req, res) => {
   }
 };
 
-// @desc    Get all fee ledgers with overdue filters
-// @route   GET /api/fees
+// @desc    Get all fee ledgers with search, lock filter & pagination (grouped by student)
+// @route   GET /api/fees?search=&lock=&page=&limit=
 // @access  Private (Admin / Receptionist)
 exports.getAllFees = async (req, res) => {
   try {
-    const { status, isLocked } = req.query;
-    const filter = {};
-    if (isLocked !== undefined) filter.isAppLocked = isLocked === 'true';
+    const { search, lock, page = 1, limit = 20 } = req.query;
+    const pageNum = Math.max(1, parseInt(page));
+    const limitNum = Math.min(100, Math.max(1, parseInt(limit)));
 
-    const fees = await FeePayment.find(filter)
+    // 1. Find matching student IDs if search query provided
+    let studentIds = undefined;
+    if (search && search.trim()) {
+      const q = search.trim();
+      const regex = new RegExp(q, 'i');
+      const matchingStudents = await Student.find({
+        $or: [
+          { fullName: regex },
+          { mobile: { $regex: q } },
+          { enrollmentNo: regex }
+        ]
+      }).select('_id');
+      studentIds = matchingStudents.map((s) => s._id);
+
+      if (studentIds.length === 0) {
+        return res.json({ success: true, students: [], totalStudents: 0, page: pageNum, totalPages: 0 });
+      }
+    }
+
+    // 2. Build fee filter
+    const feeFilter = {};
+    if (studentIds) feeFilter.studentId = { $in: studentIds };
+    if (lock === 'locked') feeFilter.isAppLocked = true;
+    else if (lock === 'active') feeFilter.isAppLocked = false;
+
+    // 3. Get all matching fee records (populated)
+    const allFees = await FeePayment.find(feeFilter)
       .populate('studentId')
       .populate('courseId')
       .populate('admissionId')
       .sort({ updatedAt: -1 });
 
-    res.json({ success: true, count: fees.length, fees });
+    // 4. Group by student on server
+    const groupedMap = {};
+    allFees.forEach((f) => {
+      const sid = f.studentId?._id?.toString() || f.studentId?.toString();
+      if (!sid) return;
+      if (!groupedMap[sid]) {
+        groupedMap[sid] = {
+          student: f.studentId,
+          fees: [],
+          totalFee: 0,
+          totalPaid: 0,
+          totalRemaining: 0,
+          isLocked: false
+        };
+      }
+      groupedMap[sid].fees.push(f);
+      groupedMap[sid].totalFee += f.totalFee || 0;
+      groupedMap[sid].totalPaid += f.paidAmount || 0;
+      groupedMap[sid].totalRemaining += f.remainingAmount || 0;
+      if (f.isAppLocked || f.studentId?.status === 'locked') {
+        groupedMap[sid].isLocked = true;
+      }
+    });
+
+    // 5. Paginate the grouped results
+    const allGroups = Object.values(groupedMap);
+    const totalStudents = allGroups.length;
+    const totalPages = Math.ceil(totalStudents / limitNum);
+    const start = (pageNum - 1) * limitNum;
+    const paged = allGroups.slice(start, start + limitNum);
+
+    res.json({
+      success: true,
+      students: paged,
+      totalStudents,
+      page: pageNum,
+      totalPages
+    });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
