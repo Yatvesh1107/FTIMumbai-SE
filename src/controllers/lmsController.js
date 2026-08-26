@@ -3,6 +3,11 @@ const VideoProgress = require('../models/VideoProgress');
 const VideoQuizAttempt = require('../models/VideoQuizAttempt');
 const LiveSession = require('../models/LiveSession');
 const Course = require('../models/Course');
+const Admission = require('../models/Admission');
+const Student = require('../models/Student');
+const Notification = require('../models/Notification');
+const { createNotification } = require('../controllers/notificationController');
+const googleMeetHelper = require('../utils/googleMeetHelper');
 const { compressVideo } = require('../utils/videoProcessor');
 const XLSX = require('xlsx');
 const path = require('path');
@@ -195,6 +200,32 @@ exports.createVideo = async (req, res) => {
       questions,
       totalQuestions: questions.length
     });
+
+    // Notify enrolled students
+    try {
+      const courseDoc = await Course.findById(courseId).select('name');
+      const courseName = courseDoc ? courseDoc.name : 'your course';
+      const admissions = await Admission.find({ courseId }).select('studentId');
+      const studentIds = [...new Set(admissions.map(a => a.studentId.toString()))];
+
+      for (const sid of studentIds) {
+        await createNotification({
+          recipientId: sid,
+          studentId: sid,
+          role: 'student',
+          title: 'New Video Lecture Added',
+          message: 'A new video "' + title.trim() + '" has been added to "' + courseName + '" (' + moduleTitle.trim() + ').',
+          type: 'general',
+          category: 'academic',
+          priority: 'medium',
+          link: '/student/videos',
+          meta: { videoId: video._id, courseId },
+          sendPush: true
+        });
+      }
+    } catch (nErr) {
+      console.error('Video upload notification error:', nErr.message);
+    }
 
     res.status(201).json({
       success: true,
@@ -496,7 +527,7 @@ exports.updateVideoProgress = async (req, res) => {
 
 // --- LIVE SESSIONS (GOOGLE MEET) ---
 
-// @desc    Get Live Sessions for a course
+// @desc    Get all Live Sessions for a course (Admin)
 // @route   GET /api/lms/courses/:courseId/live-sessions
 // @access  Private
 exports.getLiveSessions = async (req, res) => {
@@ -504,7 +535,42 @@ exports.getLiveSessions = async (req, res) => {
     const { courseId } = req.params;
     const sessions = await LiveSession.find({ courseId })
       .populate('trainerId', 'name email')
+      .populate('targetBatches', 'name')
+      .populate('targetStudents', 'fullName enrollmentNo')
       .sort({ scheduledDate: -1, startTime: -1 });
+
+    res.json({ success: true, count: sessions.length, sessions });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// @desc    Get my live sessions (Student — targeted)
+// @route   GET /api/lms/live/my
+// @access  Private (Student)
+exports.getMyLiveSessions = async (req, res) => {
+  try {
+    const studentId = req.user.studentId || req.user._id;
+    const student = await Student.findById(studentId);
+    if (!student) return res.status(404).json({ success: false, message: 'Student not found' });
+
+    // Find student's enrolled courses via Admission
+    const admissions = await Admission.find({ studentId, status: { $ne: 'cancelled' } }).select('courseId batchId');
+    const enrolledCourseIds = admissions.map(a => a.courseId.toString());
+    const enrolledBatchIds = admissions.map(a => a.batchId).filter(Boolean).map(b => b.toString());
+
+    const sessions = await LiveSession.find({
+      courseId: { $in: enrolledCourseIds },
+      status: { $in: ['Scheduled', 'Live'] },
+      $or: [
+        { targetType: 'all' },
+        { targetType: 'batch', targetBatches: { $in: enrolledBatchIds } },
+        { targetType: 'individual', targetStudents: studentId }
+      ]
+    })
+      .populate('courseId', 'name')
+      .populate('trainerId', 'name')
+      .sort({ scheduledDate: 1, startTime: 1 });
 
     res.json({ success: true, count: sessions.length, sessions });
   } catch (error) {
@@ -518,38 +584,208 @@ exports.getLiveSessions = async (req, res) => {
 exports.createLiveSession = async (req, res) => {
   try {
     const {
-      courseId,
-      title,
-      agenda,
-      meetLink,
-      scheduledDate,
-      startTime,
-      endTime,
-      batchTiming
+      courseId, title, agenda, meetLink,
+      scheduledDate, startTime, endTime, batchTiming,
+      targetType, targetBatches, targetStudents, autoGenerateLink
     } = req.body;
 
-    if (!courseId || !title || !meetLink || !scheduledDate || !startTime || !endTime) {
+    if (!courseId || !title || !scheduledDate || !startTime || !endTime) {
       return res.status(400).json({
         success: false,
-        message: 'Course, title, GMeet link, date, start time, and end time are required'
+        message: 'Course, title, date, start time, and end time are required'
+      });
+    }
+
+    let finalMeetLink = meetLink ? meetLink.trim() : '';
+
+    // Auto-generate link if requested and Google is authorized
+    if (autoGenerateLink === 'true' && !finalMeetLink && googleMeetHelper.isAuthorized()) {
+      try {
+        finalMeetLink = await googleMeetHelper.createMeetLink({
+          title: title.trim(),
+          agenda: agenda || '',
+          date: scheduledDate,
+          startTime,
+          endTime
+        });
+      } catch (e) {
+        console.error('Auto generate meet link failed:', e.message);
+      }
+    }
+
+    if (!finalMeetLink) {
+      return res.status(400).json({
+        success: false,
+        message: 'Google Meet link is required (paste manually or link Google account for auto-generation)'
       });
     }
 
     const session = await LiveSession.create({
       courseId,
       title: title.trim(),
-      agenda,
+      agenda: agenda || '',
       trainerId: req.user._id,
-      meetLink: meetLink.trim(),
+      meetLink: finalMeetLink,
       scheduledDate: new Date(scheduledDate),
       startTime,
       endTime,
       batchTiming: batchTiming || 'All Batches',
+      targetType: targetType || 'all',
+      targetBatches: targetBatches || [],
+      targetStudents: targetStudents || [],
       status: 'Scheduled'
     });
+
+    // Send notifications to targeted students
+    try {
+      const course = await Course.findById(courseId).select('name');
+      const courseName = course ? course.name : 'your course';
+      let targetStudentIds = [];
+
+      if (targetType === 'individual' && targetStudents && targetStudents.length > 0) {
+        targetStudentIds = targetStudents;
+      } else {
+        const filter = { courseId };
+        if (targetType === 'batch' && targetBatches && targetBatches.length > 0) {
+          filter.batchId = { $in: targetBatches };
+        }
+        const admissions = await Admission.find(filter).select('studentId');
+        targetStudentIds = [...new Set(admissions.map(a => a.studentId.toString()))];
+      }
+
+      for (const sid of targetStudentIds) {
+        await createNotification({
+          recipientId: sid,
+          studentId: sid,
+          role: 'student',
+          title: 'New Live Session Scheduled',
+          message: 'A live session "' + title.trim() + '" for "' + courseName + '" is scheduled on ' + new Date(scheduledDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) + ' at ' + startTime + '.',
+          type: 'live_class',
+          category: 'academic',
+          priority: 'high',
+          link: '/student/live-classes',
+          meta: { liveSessionId: session._id, courseId },
+          sendPush: true
+        });
+      }
+    } catch (nErr) {
+      console.error('Live session notification error:', nErr.message);
+    }
 
     res.status(201).json({ success: true, message: 'Live class scheduled successfully!', session });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// @desc    Update Live Session (Admin)
+// @route   PUT /api/lms/live-sessions/:sessionId
+// @access  Private (Admin)
+exports.updateLiveSession = async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const session = await LiveSession.findById(sessionId);
+    if (!session) return res.status(404).json({ success: false, message: 'Session not found' });
+
+    const allowed = ['title', 'agenda', 'meetLink', 'scheduledDate', 'startTime', 'endTime', 'batchTiming', 'status', 'targetType', 'targetBatches', 'targetStudents'];
+    const updates = {};
+    allowed.forEach(f => { if (req.body[f] !== undefined) updates[f] = req.body[f]; });
+
+    if (updates.scheduledDate) updates.scheduledDate = new Date(updates.scheduledDate);
+
+    const updated = await LiveSession.findByIdAndUpdate(sessionId, updates, { new: true })
+      .populate('courseId', 'name')
+      .populate('trainerId', 'name email')
+      .populate('targetBatches', 'name')
+      .populate('targetStudents', 'fullName enrollmentNo');
+
+    res.json({ success: true, message: 'Session updated!', session: updated });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// @desc    Delete Live Session (Admin)
+// @route   DELETE /api/lms/live-sessions/:sessionId
+// @access  Private (Admin)
+exports.deleteLiveSession = async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const session = await LiveSession.findByIdAndDelete(sessionId);
+    if (!session) return res.status(404).json({ success: false, message: 'Session not found' });
+    res.json({ success: true, message: 'Session deleted!' });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// @desc    Check Google Meet auth status (Admin)
+// @route   GET /api/lms/google/auth-status
+// @access  Private (Admin)
+exports.checkGoogleAuth = async (req, res) => {
+  try {
+    res.json({ isLinked: googleMeetHelper.isAuthorized() });
+  } catch (error) {
+    res.json({ isLinked: false });
+  }
+};
+
+// @desc    Get Google OAuth URL (Admin)
+// @route   GET /api/lms/google/auth-url
+// @access  Private (Admin)
+exports.getGoogleAuthUrl = async (req, res) => {
+  try {
+    if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
+      return res.status(400).json({ success: false, message: 'Google OAuth not configured on server' });
+    }
+    const url = googleMeetHelper.getAuthUrl();
+    res.json({ success: true, url });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// @desc    Save Google OAuth token (Admin)
+// @route   POST /api/lms/google/save-token
+// @access  Private (Admin)
+exports.saveGoogleToken = async (req, res) => {
+  try {
+    const { code } = req.body;
+    if (!code) return res.status(400).json({ success: false, message: 'Auth code required' });
+    await googleMeetHelper.saveTokens(code);
+    res.json({ success: true, message: 'Google account linked successfully!' });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Failed to save token: ' + error.message });
+  }
+};
+
+// @desc    Unlink Google account (Admin)
+// @route   POST /api/lms/google/unlink
+// @access  Private (Admin)
+exports.unlinkGoogleAuth = async (req, res) => {
+  try {
+    googleMeetHelper.unlinkAuth();
+    res.json({ success: true, message: 'Google account unlinked' });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// @desc    Auto-generate Google Meet link (Admin)
+// @route   POST /api/lms/google/generate-meet
+// @access  Private (Admin)
+exports.generateMeetLink = async (req, res) => {
+  try {
+    if (!googleMeetHelper.isAuthorized()) {
+      return res.status(400).json({ success: false, message: 'Google account not linked' });
+    }
+    const { title, agenda, date, startTime, endTime } = req.body;
+    if (!date || !startTime || !endTime) {
+      return res.status(400).json({ success: false, message: 'Date, start time, and end time required' });
+    }
+    const link = await googleMeetHelper.createMeetLink({ title, agenda, date, startTime, endTime });
+    res.json({ success: true, link });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Failed to generate link: ' + error.message });
   }
 };

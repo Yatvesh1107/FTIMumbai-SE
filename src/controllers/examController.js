@@ -6,6 +6,7 @@ const Admission = require('../models/Admission');
 const Batch = require('../models/Batch');
 const Course = require('../models/Course');
 const Student = require('../models/Student');
+const Notification = require('../models/Notification');
 
 // --- QUESTIONS ---
 
@@ -303,6 +304,41 @@ exports.createExamSchedule = async (req, res) => {
       status: 'Active'
     });
 
+    // Notify targeted students
+    try {
+      const course = await Course.findById(courseId).select('name');
+      const courseName = course ? course.name : 'your course';
+      let targetStudentIds = [];
+
+      if (targetType === 'individual' && targetStudentIds.length > 0) {
+        targetStudentIds = targetStudentIds;
+      } else {
+        const admFilter = { courseId };
+        if (batchId && batchId !== 'All' && batchId !== 'all') {
+          admFilter.batchId = finalBatchId;
+        }
+        const admissions = await Admission.find(admFilter).select('studentId');
+        targetStudentIds = [...new Set(admissions.map(a => a.studentId.toString()))];
+      }
+
+      for (const sid of targetStudentIds) {
+        await Notification.create({
+          recipientId: sid,
+          studentId: sid,
+          role: 'student',
+          title: 'New Exam Scheduled',
+          message: 'Exam "' + examTitle.trim() + '" for "' + courseName + '" is now available. Duration: ' + (Number(durationMinutes) || 45) + ' mins, Total Marks: ' + calculatedTotalMarks + '.',
+          type: 'exam_scheduled',
+          category: 'academic',
+          priority: 'high',
+          link: '/student/exams',
+          meta: { examScheduleId: schedule._id, courseId, examTitle: examTitle.trim() }
+        });
+      }
+    } catch (nErr) {
+      console.error('Exam schedule notification error:', nErr.message);
+    }
+
     res.status(201).json({
       success: true,
       message: `Exam scheduled successfully for ${schedule.batchNameSnapshot} with ${selectedQuestions.length} randomly selected questions!`,
@@ -508,6 +544,29 @@ exports.scheduleStudentReExam = async (req, res) => {
       }
     );
 
+    // Notify student
+    try {
+      const scheduleDoc = await ExamSchedule.findById(examScheduleId).select('examTitle courseId');
+      const courseDoc = scheduleDoc ? await Course.findById(scheduleDoc.courseId).select('name') : null;
+      const courseName = courseDoc ? courseDoc.name : 'your course';
+      const examName = scheduleDoc ? scheduleDoc.examTitle : 'your exam';
+
+      await Notification.create({
+        recipientId: studentId,
+        studentId: studentId,
+        role: 'student',
+        title: 'Re-Exam Scheduled',
+        message: 'Your re-exam "' + examName + '" for "' + courseName + '" (Attempt #' + currentAttempt + ') is scheduled from ' + startDate.toLocaleString('en-IN') + ' to ' + endDate.toLocaleString('en-IN') + '.',
+        type: 'exam_scheduled',
+        category: 'academic',
+        priority: 'high',
+        link: '/student/exams',
+        meta: { examScheduleId, studentId, attemptNumber: currentAttempt }
+      });
+    } catch (nErr) {
+      console.error('Re-exam notification error:', nErr.message);
+    }
+
     res.json({
       success: true,
       message: `Re-Exam (Attempt #${currentAttempt}) scheduled successfully for the student from ${startDate.toLocaleString('en-IN')} to ${endDate.toLocaleString('en-IN')}!`,
@@ -560,6 +619,29 @@ exports.requestReExam = async (req, res) => {
       reason: reason.trim(),
       status: 'Pending'
     });
+
+    // Notify admin
+    try {
+      const studentDoc = await Student.findById(req.user.studentId).select('fullName enrollmentNo');
+      const courseDoc = await Course.findById(schedule.courseId).select('name');
+      const studentName = studentDoc ? studentDoc.fullName : 'A student';
+      const courseName = courseDoc ? courseDoc.name : 'a course';
+
+      await Notification.create({
+        recipientId: null,
+        studentId: req.user.studentId,
+        role: 'admin',
+        title: 'New Re-Exam Request',
+        message: studentName + ' (' + (studentDoc?.enrollmentNo || 'N/A') + ') has requested a re-exam for "' + courseName + '". Reason: ' + reason.trim().substring(0, 100),
+        type: 'exam_reminder',
+        category: 'academic',
+        priority: 'medium',
+        link: '/admin/exams',
+        meta: { reExamRequestId: reExamReq._id, studentId: req.user.studentId, examScheduleId }
+      });
+    } catch (nErr) {
+      console.error('Re-exam request admin notification error:', nErr.message);
+    }
 
     res.status(201).json({
       success: true,

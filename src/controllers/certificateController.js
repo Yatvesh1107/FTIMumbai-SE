@@ -2,6 +2,7 @@ const Certificate = require('../models/Certificate');
 const Student = require('../models/Student');
 const Course = require('../models/Course');
 const Admission = require('../models/Admission');
+const Notification = require('../models/Notification');
 
 const generateCertificateNo = async () => {
   const count = await Certificate.countDocuments();
@@ -125,6 +126,25 @@ exports.publishCertificate = async (req, res) => {
     certificate.publishedDate = new Date();
     certificate.publishedBy = req.user ? req.user._id : null;
     await certificate.save();
+
+    // Notify student
+    try {
+      await Notification.create({
+        recipientId: certificate.studentId,
+        studentId: certificate.studentId,
+        role: 'student',
+        title: 'Certificate Published!',
+        message: 'Your certificate "' + certificate.certificateNo + '" for "' + certificate.courseName + '" has been published! Grade: ' + certificate.grade + ', Result: ' + certificate.result + '.',
+        type: 'certificate',
+        category: 'academic',
+        priority: 'high',
+        link: '/student/certificates',
+        meta: { certificateId: certificate._id, certificateNo: certificate.certificateNo, courseId: certificate.courseId }
+      });
+    } catch (nErr) {
+      console.error('Certificate publish notification error:', nErr.message);
+    }
+
     res.json({ success: true, message: 'Certificate published!', certificate });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });

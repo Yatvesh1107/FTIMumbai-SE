@@ -2,6 +2,7 @@ const FeePayment = require('../models/FeePayment');
 const Admission = require('../models/Admission');
 const Student = require('../models/Student');
 const Course = require('../models/Course');
+const Notification = require('../models/Notification');
 
 const generateReceiptNo = async () => {
   const count = await FeePayment.aggregate([
@@ -116,6 +117,44 @@ exports.collectFee = async (req, res) => {
       nextDueDate: feeDoc.nextDueDate,
       paymentStatus: feeDoc.remainingAmount === 0 ? 'paid' : 'partial'
     });
+
+    // 7. Send notifications to student
+    try {
+      const feeCourse = await Course.findById(feeDoc.courseId).select('name');
+      const courseName = feeCourse ? feeCourse.name : 'your course';
+
+      // Payment success notification
+      await Notification.create({
+        recipientId: feeDoc.studentId,
+        studentId: feeDoc.studentId,
+        role: 'student',
+        title: 'Payment Received',
+        message: 'Payment of ₹' + payAmount.toLocaleString('en-IN') + ' for "' + courseName + '" has been recorded successfully. Receipt: ' + receiptNo + '. Remaining: ₹' + feeDoc.remainingAmount.toLocaleString('en-IN') + '.',
+        type: 'payment_success',
+        category: 'payment',
+        priority: 'medium',
+        link: '/student/fees',
+        meta: { feeId: feeDoc._id, receiptNo, paidAmount: payAmount, remaining: feeDoc.remainingAmount }
+      });
+
+      // Account unlocked notification (if was locked)
+      if (!hasOverdue && feeDoc.isAppLocked === false) {
+        await Notification.create({
+          recipientId: feeDoc.studentId,
+          studentId: feeDoc.studentId,
+          role: 'student',
+          title: 'Account Unlocked',
+          message: 'Your account has been unlocked! You can now access the portal. Course: "' + courseName + '".',
+          type: 'account_status',
+          category: 'system',
+          priority: 'high',
+          link: '/student',
+          meta: { feeId: feeDoc._id, unlocked: true }
+        });
+      }
+    } catch (nErr) {
+      console.error('Fee payment notification error:', nErr.message);
+    }
 
     res.json({
       success: true,
@@ -310,6 +349,24 @@ exports.unlockOverride = async (req, res) => {
       { studentId: student._id },
       { isAppLocked: false }
     );
+
+    // Notify student of admin unlock
+    try {
+      await Notification.create({
+        recipientId: student._id,
+        studentId: student._id,
+        role: 'student',
+        title: 'Account Unlocked by Admin',
+        message: 'Your account has been unlocked by the administrator. You can now access the portal.',
+        type: 'account_status',
+        category: 'system',
+        priority: 'high',
+        link: '/student',
+        meta: { unlocked: true, unlockedBy: 'admin' }
+      });
+    } catch (nErr) {
+      console.error('Unlock notification error:', nErr.message);
+    }
 
     res.json({ success: true, message: 'Student account unlocked successfully by Admin override.' });
   } catch (error) {

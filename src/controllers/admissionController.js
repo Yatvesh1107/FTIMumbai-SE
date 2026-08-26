@@ -3,6 +3,7 @@ const Student = require('../models/Student');
 const User = require('../models/User');
 const Course = require('../models/Course');
 const FeePayment = require('../models/FeePayment');
+const Notification = require('../models/Notification');
 
 // Helper to generate unique codes
 const generateEnrollmentNo = async () => {
@@ -290,6 +291,27 @@ exports.createAdmission = async (req, res) => {
 
     // 6. Update Course student count
     await Course.findByIdAndUpdate(course._id, { $inc: { totalStudents: 1 } });
+
+    // 7. Send welcome notification to student
+    try {
+      const isNewStudent = !req.body.studentId;
+      await Notification.create({
+        recipientId: student._id,
+        studentId: student._id,
+        role: 'student',
+        title: isNewStudent ? 'Welcome to FTI!' : 'New Course Enrolled',
+        message: isNewStudent
+          ? 'Welcome to FTI Mumbai! You have been enrolled in "' + course.name + '". Enrollment No: ' + student.enrollmentNo + '. Start exploring your courses now!'
+          : 'You have been enrolled in a new course "' + course.name + '". Your admission number is ' + admissionNo + '.',
+        type: 'admission_welcome',
+        category: 'academic',
+        priority: 'high',
+        link: '/student/courses',
+        meta: { admissionId: admission._id, courseId: course._id, studentId: student._id, isNewStudent }
+      });
+    } catch (nErr) {
+      console.error('Admission welcome notification error:', nErr.message);
+    }
 
     res.status(201).json({
       success: true,

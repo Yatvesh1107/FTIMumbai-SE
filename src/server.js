@@ -72,6 +72,7 @@ app.use("/api/academics", require("./routes/academicRoutes"));
 app.use("/api/exams", require("./routes/examRoutes"));
 app.use("/api/certificates", require("./routes/certificateRoutes"));
 app.use("/api/marksheets", require("./routes/marksheetRoutes"));
+app.use("/api/notifications", require("./routes/notificationRoutes"));
 
 // Public Enquiry Form Route
 app.post("/api/enquiry", async (req, res) => {
@@ -98,8 +99,12 @@ app.use((err, req, res, next) => {
 });
 
 // Increased timeouts for large video uploads + server-side compression (1 hour)
+const { scheduleFeeReminders, scheduleLiveSessionStatus } = require('./cronJobs');
+
 const server = app.listen(PORT, () => {
   console.log(`🚀 FTI Mumbai Backend Server running on http://localhost:${PORT}`);
+  scheduleFeeReminders();
+  scheduleLiveSessionStatus();
 });
 server.timeout = 3600000;
 server.keepAliveTimeout = 3600000;
