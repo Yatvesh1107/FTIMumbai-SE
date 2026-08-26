@@ -71,6 +71,7 @@ app.use("/api/lms", require("./routes/lmsRoutes"));
 app.use("/api/academics", require("./routes/academicRoutes"));
 app.use("/api/exams", require("./routes/examRoutes"));
 app.use("/api/certificates", require("./routes/certificateRoutes"));
+app.use("/api/marksheets", require("./routes/marksheetRoutes"));
 
 // Public Enquiry Form Route
 app.post("/api/enquiry", async (req, res) => {

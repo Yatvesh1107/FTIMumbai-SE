@@ -418,26 +418,24 @@ exports.submitExam = async (req, res) => {
 
     const currentAttemptNumber = existingResult ? (existingResult.attemptNumber || 1) + 1 : 1;
 
-    const result = await ExamResult.findOneAndUpdate(
-      { examScheduleId, studentId: req.user.studentId },
-      {
-        courseId: schedule.courseId,
-        score,
-        totalQuestions: schedule.questions.length,
-        attemptedQuestions: attemptedCount,
-        correctAnswers: correctCount,
-        wrongAnswers: wrongCount,
-        unattempted: schedule.questions.length - attemptedCount,
-        percentage,
-        grade,
-        status,
-        attemptNumber: currentAttemptNumber,
-        reExamAllowed: false, // Lock after this attempt
-        answers: detailedAnswers,
-        submittedAt: new Date()
-      },
-      { upsert: true, new: true }
-    );
+    const result = await ExamResult.create({
+      examScheduleId,
+      studentId: req.user.studentId,
+      courseId: schedule.courseId,
+      score,
+      totalQuestions: schedule.questions.length,
+      attemptedQuestions: attemptedCount,
+      correctAnswers: correctCount,
+      wrongAnswers: wrongCount,
+      unattempted: schedule.questions.length - attemptedCount,
+      percentage,
+      grade,
+      status,
+      attemptNumber: currentAttemptNumber,
+      reExamAllowed: false,
+      answers: detailedAnswers,
+      submittedAt: new Date()
+    });
 
     res.json({
       success: true,
