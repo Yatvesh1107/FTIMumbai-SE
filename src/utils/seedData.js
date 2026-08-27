@@ -1,6 +1,5 @@
 require('dotenv').config();
 const mongoose = require('mongoose');
-const User = require('../models/User');
 const Course = require('../models/Course');
 const Question = require('../models/Question');
 const VideoLecture = require('../models/VideoLecture');
@@ -9,35 +8,12 @@ const StudyNote = require('../models/StudyNote');
 const seedDB = async () => {
   try {
     await mongoose.connect(process.env.MONGODB_URI);
-    console.log('🌱 Connected to MongoDB for seeding...');
+    console.log('🌱 Connected to MongoDB for content seeding...');
 
-    // 1. Seed Super Admin
-    const existingAdmin = await User.findOne({ email: 'admin@ftimumbai.com' });
-    if (!existingAdmin) {
-      await User.create({
-        name: 'Super Admin',
-        email: 'admin@ftimumbai.com',
-        password: 'admin123',
-        role: 'admin',
-        mobile: '9876543210'
-      });
-      console.log('✅ Admin user created: admin@ftimumbai.com / admin123');
-    }
+    // NOTE: The Super Admin is seeded separately via `seedAdmin.js`.
+    // Receptionists & staff are added by the admin from the admin panel (not seeded).
 
-    // 2. Seed Receptionist
-    const existingReceptionist = await User.findOne({ email: 'reception@ftimumbai.com' });
-    if (!existingReceptionist) {
-      await User.create({
-        name: 'Priya Sharma (Admission Desk)',
-        email: 'reception@ftimumbai.com',
-        password: 'reception123',
-        role: 'receptionist',
-        mobile: '9876543211'
-      });
-      console.log('✅ Receptionist user created: reception@ftimumbai.com / reception123');
-    }
-
-    // 3. Seed Standard FTI Courses with Pricing Floors & LMS Content by Admin
+    // Seed Standard FTI Courses with Pricing Floors & LMS Content by Admin
     const coursesData = [
       {
         name: 'Master in Web Designing & Development',
@@ -147,7 +123,7 @@ const seedDB = async () => {
       }
     }
 
-    console.log('🎉 Seeding completed for 3-Panel Architecture (Admin, Receptionist, Student)!');
+    console.log('🎉 Content seeding completed (Courses, LMS, Questions). Admin & staff are managed via the panel.');
     process.exit(0);
   } catch (err) {
     console.error('Seeding error:', err);
