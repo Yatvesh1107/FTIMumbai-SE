@@ -614,9 +614,12 @@ exports.createLiveSession = async (req, res) => {
     }
 
     if (!finalMeetLink) {
+      const reason = autoGenerateLink === 'true'
+        ? 'Google account is not linked/authorized (got 403 access_denied — add yourself as a Test User in Google Cloud Console, or paste a Meet link manually).'
+        : 'No Google Meet link was received. Please paste a valid link like https://meet.google.com/xxx-xxxx-xxx.';
       return res.status(400).json({
         success: false,
-        message: 'Google Meet link is required (paste manually or link Google account for auto-generation)'
+        message: reason
       });
     }
 
