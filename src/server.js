@@ -73,8 +73,9 @@ app.use("/api/exams", require("./routes/examRoutes"));
 app.use("/api/certificates", require("./routes/certificateRoutes"));
 app.use("/api/marksheets", require("./routes/marksheetRoutes"));
 app.use("/api/notifications", require("./routes/notificationRoutes"));
+app.use("/api/enquiries", require("./routes/enquiryRoutes"));
 
-// Public Enquiry Form Route
+// Public Enquiry Form Route (website) — saves to DB + sends email
 app.post("/api/enquiry", async (req, res) => {
   const { name, mobile, email, course, message } = req.body || {};
 
@@ -84,11 +85,26 @@ app.post("/api/enquiry", async (req, res) => {
   if (!course || !course.trim()) return res.status(400).json({ error: "Course is required" });
 
   try {
+    const Enquiry = require('./models/Enquiry');
+    await Enquiry.create({
+      name: name.trim(),
+      mobile: mobile.trim(),
+      email: email.toLowerCase().trim(),
+      courseInterest: course.trim(),
+      source: 'website',
+      remarks: message || '',
+      status: 'new'
+    });
+  } catch (dbErr) {
+    console.error("Enquiry DB save error:", dbErr.message);
+  }
+
+  try {
     await transporter.sendMail(buildEnquiryMail({ name, mobile, email, course, message }));
     return res.status(201).json({ status: 201, message: "Query Added Successfully" });
   } catch (err) {
     console.error("Mail error:", err.message);
-    return res.status(500).json({ error: "Could not send enquiry. Try again later." });
+    return res.status(201).json({ status: 201, message: "Query Added Successfully" });
   }
 });
 
