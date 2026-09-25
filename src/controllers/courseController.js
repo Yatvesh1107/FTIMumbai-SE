@@ -92,7 +92,12 @@ exports.createCourse = async (req, res) => {
       standardFee,
       minFloorFee,
       certificateTemplateKey,
-      status
+      status,
+      schoolId,
+      mode,
+      provider,
+      image,
+      orderInSchool
     } = req.body;
 
     if (!name || !courseCode || standardFee === undefined || minFloorFee === undefined) {
@@ -131,7 +136,12 @@ exports.createCourse = async (req, res) => {
       standardFee: Number(standardFee),
       minFloorFee: Number(minFloorFee),
       certificateTemplateKey: certificateTemplateKey || 'standard_fti',
-      status: status || 'Active'
+      status: status || 'Active',
+      schoolId: schoolId || null,
+      mode: mode || '',
+      provider: provider || 'FTI Mumbai',
+      image: image || '',
+      orderInSchool: Number(orderInSchool) || 0
     });
 
     res.status(201).json({
@@ -160,7 +170,12 @@ exports.updateCourse = async (req, res) => {
       standardFee,
       minFloorFee,
       certificateTemplateKey,
-      status
+      status,
+      schoolId,
+      mode,
+      provider,
+      image,
+      orderInSchool
     } = req.body;
 
     if (standardFee !== undefined && minFloorFee !== undefined) {
@@ -188,6 +203,11 @@ exports.updateCourse = async (req, res) => {
     if (minFloorFee !== undefined) course.minFloorFee = Number(minFloorFee);
     if (certificateTemplateKey) course.certificateTemplateKey = certificateTemplateKey;
     if (status) course.status = status;
+    if (schoolId !== undefined) course.schoolId = schoolId || null;
+    if (mode !== undefined) course.mode = mode;
+    if (provider !== undefined) course.provider = provider;
+    if (image !== undefined) course.image = image;
+    if (orderInSchool !== undefined) course.orderInSchool = Number(orderInSchool) || 0;
 
     await course.save();
 

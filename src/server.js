@@ -64,6 +64,8 @@ app.get("/api/health", (_req, res) => res.json({ ok: true, timestamp: new Date()
 // Mount API Routes
 app.use("/api/auth", require("./routes/authRoutes"));
 app.use("/api/courses", require("./routes/courseRoutes"));
+app.use("/api/schools", require("./routes/schoolRoutes"));
+app.use("/api/uploads", require("./routes/uploadRoutes"));
 app.use("/api/admissions", require("./routes/admissionRoutes"));
 app.use("/api/fees", require("./routes/feeRoutes"));
 app.use("/api/batches", require("./routes/batchRoutes"));

@@ -23,7 +23,14 @@ const courseSchema = new mongoose.Schema({
   thumbnail: { type: String, default: '' },
   duration: { type: String, default: '3 Months' }, // e.g. "3 Months", "6 Months"
   durationInDays: { type: Number, default: 90 },
-  
+
+  // Marketing / School placement fields (additive — no existing field behaviour changes)
+  schoolId: { type: mongoose.Schema.Types.ObjectId, ref: 'School', default: null },
+  mode: { type: String, default: '' },                // e.g. "Online + Classroom", "Classroom"
+  provider: { type: String, default: 'FTI Mumbai' },  // institute / partner badge shown on cards
+  image: { type: String, default: '' },               // card image URL (stored at /uploads/...)
+  orderInSchool: { type: Number, default: 0 },        // display order within the school page
+
   // Dynamic Pricing Engine
   standardFee: { 
     type: Number, 

@@ -8,7 +8,8 @@
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
     "seed:admin": "node src/utils/seedAdmin.js",
-    "seed": "node src/utils/seedData.js"
+    "seed": "node src/utils/seedData.js",
+    "seed:schools": "node src/utils/seedSchools.js"
   },
   "dependencies": {
     "@ffmpeg-installer/ffmpeg": "^1.1.0",
