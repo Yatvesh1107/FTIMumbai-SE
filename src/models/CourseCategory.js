@@ -1,15 +1,15 @@
 const mongoose = require('mongoose');
 
-const schoolSchema = new mongoose.Schema({
+const courseCategorySchema = new mongoose.Schema({
   slug: {
     type: String,
-    required: [true, 'School slug is required'],
+    required: [true, 'Course category slug is required'],
     unique: true,
     lowercase: true,
     trim: true,
     match: [/^[a-z0-9-]+$/, 'Slug may only contain lowercase letters, numbers and hyphens']
   },
-  name: { type: String, required: [true, 'School name is required'], trim: true },
+  name: { type: String, required: [true, 'Course category name is required'], trim: true },
   navLabel: { type: String, required: [true, 'Nav label is required'], trim: true },
   enabled: { type: Boolean, default: true },
   poweredBy: { type: String, default: '', trim: true },
@@ -33,13 +33,13 @@ const schoolSchema = new mongoose.Schema({
   toObject: { virtuals: true }
 });
 
-// All courses assigned to this school (single source of truth = Course.schoolId)
-schoolSchema.virtual('courses', {
+// All courses assigned to this category (single source of truth = Course.courseCategoryId)
+courseCategorySchema.virtual('courses', {
   ref: 'Course',
   localField: '_id',
-  foreignField: 'schoolId'
+  foreignField: 'courseCategoryId'
 });
 
-schoolSchema.index({ enabled: 1, orderIndex: 1 });
+courseCategorySchema.index({ enabled: 1, orderIndex: 1 });
 
-module.exports = mongoose.model('School', schoolSchema);
+module.exports = mongoose.model('CourseCategory', courseCategorySchema);

@@ -2,16 +2,16 @@ require('dotenv').config();
 const mongoose = require('mongoose');
 const path = require('path');
 const fs = require('fs');
-const School = require('../models/School');
+const CourseCategory = require('../models/CourseCategory');
 
-// Bootstraps the 5 School shells (marketing copy only — NO courses).
+// Bootstraps the 5 Course Category shells (marketing copy only — NO courses).
 // Courses are created by the admin via the admin panel Courses form,
-// which assigns them to a schoolId. Idempotent: upserts by slug.
+// which assigns them to a courseCategoryId. Idempotent: upserts by slug.
 const feAssetsRoot = process.env.FTI_FRONTEND_DIR || path.join(__dirname, '..', '..', '..', 'FTIMumbai');
 const uploadsRoot = path.join(__dirname, '..', '..', 'uploads');
-const schoolsDir = path.join(uploadsRoot, 'schools');
+const categoriesDir = path.join(uploadsRoot, 'categories');
 
-const schoolDefs = [
+const categoryDefs = [
   {
     slug: 'code-data-careers',
     name: 'Code & Data Careers',
@@ -105,26 +105,26 @@ const schoolDefs = [
 ];
 
 const copyHeroImage = (def) => {
-  if (!fs.existsSync(schoolsDir)) fs.mkdirSync(schoolsDir, { recursive: true });
+  if (!fs.existsSync(categoriesDir)) fs.mkdirSync(categoriesDir, { recursive: true });
   const src = path.join(feAssetsRoot, 'src', 'assets', def.heroSource);
   const ext = path.extname(def.heroSource);
-  const dest = path.join(schoolsDir, `${def.slug}${ext}`);
+  const dest = path.join(categoriesDir, `${def.slug}${ext}`);
   if (!fs.existsSync(src)) {
     console.warn(`⚠️  Skipping hero image for ${def.slug}: source not found at ${src}`);
     return '';
   }
   fs.copyFileSync(src, dest);
-  return `/uploads/schools/${def.slug}${ext}`;
+  return `/uploads/categories/${def.slug}${ext}`;
 };
 
-const seedSchools = async () => {
+const seedCourseCategories = async () => {
   try {
     await mongoose.connect(process.env.MONGODB_URI);
-    console.log('🏫 Connected to MongoDB for school shell seeding...');
+    console.log('🏫 Connected to MongoDB for course category shell seeding...');
 
-    for (const def of schoolDefs) {
+    for (const def of categoryDefs) {
       const heroImage = copyHeroImage(def);
-      await School.updateOne(
+      await CourseCategory.updateOne(
         { slug: def.slug },
         {
           $set: {
@@ -143,19 +143,19 @@ const seedSchools = async () => {
         },
         { upsert: true }
       );
-      console.log(`✅ Seeded School shell: ${def.slug} ${heroImage ? `(hero ${heroImage})` : ''}`);
+      console.log(`✅ Seeded Course Category shell: ${def.slug} ${heroImage ? `(hero ${heroImage})` : ''}`);
     }
 
-    console.log('🎓 School shells seeded. Courses are added by admin via the Courses & Pricing Matrix form.');
+    console.log('🎓 Course category shells seeded. Courses are added by admin via the Courses & Pricing Matrix form.');
     process.exit(0);
   } catch (err) {
-    console.error('School shell seeding error:', err);
+    console.error('Course category shell seeding error:', err);
     process.exit(1);
   }
 };
 
 if (require.main === module) {
-  seedSchools();
+  seedCourseCategories();
 }
 
-module.exports = seedSchools;
+module.exports = seedCourseCategories;

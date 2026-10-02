@@ -93,11 +93,14 @@ exports.createCourse = async (req, res) => {
       minFloorFee,
       certificateTemplateKey,
       status,
-      schoolId,
+      courseCategoryId,
       mode,
       provider,
       image,
-      orderInSchool
+      orderInCategory,
+      wywl,
+      skills,
+      content
     } = req.body;
 
     if (!name || !courseCode || standardFee === undefined || minFloorFee === undefined) {
@@ -137,11 +140,21 @@ exports.createCourse = async (req, res) => {
       minFloorFee: Number(minFloorFee),
       certificateTemplateKey: certificateTemplateKey || 'standard_fti',
       status: status || 'Active',
-      schoolId: schoolId || null,
+      courseCategoryId: courseCategoryId || null,
       mode: mode || '',
       provider: provider || 'FTI Mumbai',
       image: image || '',
-      orderInSchool: Number(orderInSchool) || 0
+      orderInCategory: Number(orderInCategory) || 0,
+      wywl: Array.isArray(wywl) ? wywl.map((t) => String(t).trim()).filter(Boolean) : [],
+      skills: Array.isArray(skills) ? skills.map((t) => String(t).trim()).filter(Boolean) : [],
+      content: Array.isArray(content)
+        ? content
+            .map((m) => ({
+              heading: m && m.heading ? String(m.heading).trim() : '',
+              topics: m && Array.isArray(m.topics) ? m.topics.map((t) => String(t).trim()).filter(Boolean) : [],
+            }))
+            .filter((m) => m.heading)
+        : []
     });
 
     res.status(201).json({
@@ -171,11 +184,14 @@ exports.updateCourse = async (req, res) => {
       minFloorFee,
       certificateTemplateKey,
       status,
-      schoolId,
+      courseCategoryId,
       mode,
       provider,
       image,
-      orderInSchool
+      orderInCategory,
+      wywl,
+      skills,
+      content
     } = req.body;
 
     if (standardFee !== undefined && minFloorFee !== undefined) {
@@ -203,11 +219,23 @@ exports.updateCourse = async (req, res) => {
     if (minFloorFee !== undefined) course.minFloorFee = Number(minFloorFee);
     if (certificateTemplateKey) course.certificateTemplateKey = certificateTemplateKey;
     if (status) course.status = status;
-    if (schoolId !== undefined) course.schoolId = schoolId || null;
+    if (courseCategoryId !== undefined) course.courseCategoryId = courseCategoryId || null;
     if (mode !== undefined) course.mode = mode;
     if (provider !== undefined) course.provider = provider;
     if (image !== undefined) course.image = image;
-    if (orderInSchool !== undefined) course.orderInSchool = Number(orderInSchool) || 0;
+    if (orderInCategory !== undefined) course.orderInCategory = Number(orderInCategory) || 0;
+    if (wywl !== undefined) course.wywl = Array.isArray(wywl) ? wywl.map((t) => String(t).trim()).filter(Boolean) : [];
+    if (skills !== undefined) course.skills = Array.isArray(skills) ? skills.map((t) => String(t).trim()).filter(Boolean) : [];
+    if (content !== undefined) {
+      course.content = Array.isArray(content)
+        ? content
+            .map((m) => ({
+              heading: m && m.heading ? String(m.heading).trim() : '',
+              topics: m && Array.isArray(m.topics) ? m.topics.map((t) => String(t).trim()).filter(Boolean) : [],
+            }))
+            .filter((m) => m.heading)
+        : [];
+    }
 
     await course.save();
 

@@ -3,7 +3,7 @@ const router = express.Router();
 const { upload, handleMulterError } = require('../middleware/uploadMiddleware');
 const { protect, authorize } = require('../middleware/auth');
 
-// @desc    Upload a single image (school hero / course card)
+// @desc    Upload a single image (category hero / course card)
 // @route   POST /api/uploads
 // @access  Private (Admin / Receptionist)
 router.post(

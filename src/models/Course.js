@@ -24,12 +24,12 @@ const courseSchema = new mongoose.Schema({
   duration: { type: String, default: '3 Months' }, // e.g. "3 Months", "6 Months"
   durationInDays: { type: Number, default: 90 },
 
-  // Marketing / School placement fields (additive — no existing field behaviour changes)
-  schoolId: { type: mongoose.Schema.Types.ObjectId, ref: 'School', default: null },
+  // Marketing / Course category placement fields (additive — no existing field behaviour changes)
+  courseCategoryId: { type: mongoose.Schema.Types.ObjectId, ref: 'CourseCategory', default: null },
   mode: { type: String, default: '' },                // e.g. "Online + Classroom", "Classroom"
   provider: { type: String, default: 'FTI Mumbai' },  // institute / partner badge shown on cards
   image: { type: String, default: '' },               // card image URL (stored at /uploads/...)
-  orderInSchool: { type: Number, default: 0 },        // display order within the school page
+  orderInCategory: { type: Number, default: 0 },      // display order within the category page
 
   // Dynamic Pricing Engine
   standardFee: { 
@@ -45,7 +45,12 @@ const courseSchema = new mongoose.Schema({
   
   certificateTemplateKey: { type: String, default: 'standard_fti' },
   status: { type: String, enum: ['Active', 'Inactive'], default: 'Active' },
-  totalStudents: { type: Number, default: 0 }
+  totalStudents: { type: Number, default: 0 },
+
+  // Course detail / syllabus content (admin-managed, shown on the public course detail page)
+  wywl: { type: [String], default: [] },                                                    // "What you'll learn" bullets
+  skills: { type: [String], default: [] },                                                  // "Skills you will gain" chips
+  content: { type: [{ heading: { type: String, default: '' }, topics: { type: [String], default: [] } }], default: [] }  // "Course Content" modules
 }, { 
   timestamps: true,
   toJSON: { virtuals: true },
